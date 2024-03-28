@@ -4,7 +4,7 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2023 Weaviate B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
 //  CONTACT: hello@weaviate.io
 //
@@ -21,13 +21,17 @@ import (
 	"net/url"
 	"runtime"
 	"sync"
+	"time"
+
+	enterrors "github.com/weaviate/weaviate/entities/errors"
+
+	"github.com/weaviate/weaviate/usecases/modulecomponents"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/weaviate/weaviate/entities/moduletools"
 	"github.com/weaviate/weaviate/modules/reranker-cohere/config"
 	"github.com/weaviate/weaviate/usecases/modulecomponents/ent"
-	"golang.org/x/sync/errgroup"
 )
 
 var _NUMCPU = runtime.NumCPU()
@@ -42,10 +46,10 @@ type client struct {
 	logger       logrus.FieldLogger
 }
 
-func New(apiKey string, logger logrus.FieldLogger) *client {
+func New(apiKey string, timeout time.Duration, logger logrus.FieldLogger) *client {
 	return &client{
 		apiKey:       apiKey,
-		httpClient:   &http.Client{},
+		httpClient:   &http.Client{Timeout: timeout},
 		host:         "https://api.cohere.ai",
 		path:         "/v1/rerank",
 		maxDocuments: 1000,
@@ -56,7 +60,7 @@ func New(apiKey string, logger logrus.FieldLogger) *client {
 func (c *client) Rank(ctx context.Context, query string, documents []string,
 	cfg moduletools.ClassConfig,
 ) (*ent.RankResult, error) {
-	eg := &errgroup.Group{}
+	eg := enterrors.NewErrorGroupWrapper(c.logger)
 	eg.SetLimit(_NUMCPU)
 
 	chunkedDocuments := c.chunkDocuments(documents, c.maxDocuments)
@@ -72,7 +76,7 @@ func (c *client) Rank(ctx context.Context, query string, documents []string,
 				documentScoreResponses[i] = documentScoreResponse
 			})
 			return nil
-		})
+		}, chunkedDocuments[i])
 	}
 	if err := eg.Wait(); err != nil {
 		return nil, err
@@ -119,6 +123,7 @@ func (c *client) performRank(ctx context.Context, query string, documents []stri
 	}
 	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", apiKey))
 	req.Header.Add("Content-Type", "application/json")
+	req.Header.Add("Request-Source", "unspecified:weaviate")
 
 	res, err := c.httpClient.Do(req)
 	if err != nil {
@@ -191,7 +196,13 @@ func (c *client) getApiKey(ctx context.Context) (string, error) {
 	if len(c.apiKey) > 0 {
 		return c.apiKey, nil
 	}
-	apiKey := ctx.Value("X-Cohere-Api-Key")
+	key := "X-Cohere-Api-Key"
+
+	apiKey := ctx.Value(key)
+	// try getting header from GRPC if not successful
+	if apiKey == nil {
+		apiKey = modulecomponents.GetValueFromGRPC(ctx, key)
+	}
 	if apiKeyHeader, ok := apiKey.([]string); ok &&
 		len(apiKeyHeader) > 0 && len(apiKeyHeader[0]) > 0 {
 		return apiKeyHeader[0], nil

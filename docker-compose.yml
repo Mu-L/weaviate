@@ -17,7 +17,7 @@ services:
       OCCURRENCE_WEIGHT_LINEAR_FACTOR: 0.75
       LOG_LEVEL: debug
   prometheus:
-    image: prom/prometheus:v2.1.0
+    image: prom/prometheus:v2.46.0
     volumes:
       - ./tools/dev/prometheus_config/:/etc/prometheus/
       - ./data/prometheus:/prometheus
@@ -48,11 +48,11 @@ services:
     ports:
       - "9090:8080"
   t2v-transformers:
-    image: semitechnologies/transformers-inference:distilbert-base-uncased
+    image: semitechnologies/transformers-inference:baai-bge-small-en-v1.5-onnx
     ports:
       - "8000:8080"
   qna-transformers:
-    image: semitechnologies/qna-transformers:bert-large-uncased-whole-word-masking-finetuned-squad
+    image: semitechnologies/qna-transformers:distilbert-base-uncased-distilled-squad
     ports:
       - "8001:8080"
   i2v-neural:

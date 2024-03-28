@@ -4,7 +4,7 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2023 Weaviate B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
 //  CONTACT: hello@weaviate.io
 //
@@ -1049,7 +1049,7 @@ func TestData_MultiTenancy(t *testing.T) {
 			WithID(fixtures.SOUP_CHICKENSOUP_ID).
 			WithProperties(map[string]interface{}{
 				"name":        "ChickenSoup",
-				"description": "updated ChickenSoup descriptio",
+				"description": "updated ChickenSoup description",
 				"price":       float32(2.1),
 			}).
 			WithTenant("nonExistentTenant").

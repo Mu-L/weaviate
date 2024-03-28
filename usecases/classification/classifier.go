@@ -4,7 +4,7 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2023 Weaviate B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
 //  CONTACT: hello@weaviate.io
 //
@@ -16,6 +16,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	enterrors "github.com/weaviate/weaviate/entities/errors"
 
 	"github.com/go-openapi/strfmt"
 	"github.com/google/uuid"
@@ -91,7 +93,7 @@ func New(sg schemaUC.SchemaGetter, cr Repo, vr vectorRepo, authorizer authorizer
 }
 
 // Repo to manage classification state, should be consistent, not used to store
-// acutal data object vectors, see VectorRepo
+// actual data object vectors, see VectorRepo
 type Repo interface {
 	Put(ctx context.Context, classification models.Classification) error
 	Get(ctx context.Context, id strfmt.UUID) (*models.Classification, error)
@@ -166,7 +168,7 @@ func (c *Classifier) Schedule(ctx context.Context, principal *models.Principal, 
 		return nil, err
 	}
 
-	go c.run(params, filters)
+	enterrors.GoWrapper(func() { c.run(params, filters) }, c.logger)
 
 	return &params, nil
 }

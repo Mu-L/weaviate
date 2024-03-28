@@ -4,7 +4,7 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2023 Weaviate B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
 //  CONTACT: hello@weaviate.io
 //
@@ -35,9 +35,12 @@ func TestFilters(t *testing.T) {
 	dirName := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
 	repo, err := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
@@ -63,9 +66,12 @@ func TestFiltersNoLengthIndex(t *testing.T) {
 	dirName := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
 	repo, err := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
@@ -118,7 +124,7 @@ func prepareCarTestSchemaAndData(repo *DB,
 		for i, fixture := range cars {
 			t.Run(fmt.Sprintf("importing car %d", i), func(t *testing.T) {
 				require.Nil(t,
-					repo.PutObject(context.Background(), &fixture, carVectors[i], nil))
+					repo.PutObject(context.Background(), &fixture, carVectors[i], nil, nil))
 			})
 		}
 	}
@@ -141,7 +147,7 @@ func prepareCarTestSchemaAndDataNoLength(repo *DB,
 		for i, fixture := range cars {
 			t.Run(fmt.Sprintf("importing car %d", i), func(t *testing.T) {
 				require.Nil(t,
-					repo.PutObject(context.Background(), &fixture, carVectors[i], nil))
+					repo.PutObject(context.Background(), &fixture, carVectors[i], nil, nil))
 			})
 		}
 	}
@@ -200,7 +206,7 @@ func testPrimitivePropsWithNoLengthIndex(repo *DB) func(t *testing.T) {
 					for pos, concept := range res {
 						ids[pos] = concept.ID
 					}
-					assert.ElementsMatch(t, ids, test.expectedIDs, "ids dont match")
+					assert.ElementsMatch(t, ids, test.expectedIDs, "ids don't match")
 
 				}
 			})
@@ -247,7 +253,7 @@ func testPrimitiveProps(repo *DB) func(t *testing.T) {
 			{
 				name:        "modelName != sprinter",
 				filter:      buildFilter("modelName", "sprinter", neq, dtText),
-				expectedIDs: []strfmt.UUID{carE63sID, carPoloID, carNilID},
+				expectedIDs: []strfmt.UUID{carE63sID, carPoloID, carNilID, carEmpty},
 			},
 			{
 				name:        "modelName = spr*er (optimizable) dtText",
@@ -332,7 +338,7 @@ func testPrimitiveProps(repo *DB) func(t *testing.T) {
 			{
 				name:        "not equal to 1995-08-17T12:47:00+02:00",
 				filter:      buildFilter("released", mustParseTime("1995-08-17T12:47:00+02:00"), neq, dtDate),
-				expectedIDs: []strfmt.UUID{carPoloID, carE63sID},
+				expectedIDs: []strfmt.UUID{carPoloID, carE63sID, carEmpty, carNilID},
 			},
 			{
 				name:        "exactly matching a specific contact email",
@@ -522,7 +528,7 @@ func testPrimitiveProps(repo *DB) func(t *testing.T) {
 			},
 			{
 				name:        "Filter unicode texts",
-				filter:      buildFilter("len(description)", 109, eq, dtInt),
+				filter:      buildFilter("len(description)", 110, eq, dtInt),
 				expectedIDs: []strfmt.UUID{carPoloID},
 			},
 			{
@@ -578,13 +584,14 @@ func testPrimitiveProps(repo *DB) func(t *testing.T) {
 					require.Contains(t, err.Error(), test.ErrMsg)
 				} else {
 					require.Nil(t, err)
+
 					require.Len(t, res, len(test.expectedIDs))
 
 					ids := make([]strfmt.UUID, len(test.expectedIDs))
 					for pos, concept := range res {
 						ids[pos] = concept.ID
 					}
-					assert.ElementsMatch(t, ids, test.expectedIDs, "ids dont match")
+					assert.ElementsMatch(t, ids, test.expectedIDs, "ids don't match")
 
 				}
 			})
@@ -977,7 +984,7 @@ var cars = []models.Object{
 			"horsepower":             int64(100),
 			"weight":                 1200.0,
 			"contact":                "sandra@efficientcars.example.com",
-			"description":            "This small car has a small engine and unicode labels (ąę), but it's very light, so it feels fater than it is.",
+			"description":            "This small car has a small engine and unicode labels (ąę), but it's very light, so it feels faster than it is.",
 			"colorWhitespace":        "dark grey",
 			"colorField":             "dark grey",
 			"colorArrayWhitespace":   []interface{}{"dark", "grey"},
@@ -1020,9 +1027,12 @@ func TestGeoPropUpdateJourney(t *testing.T) {
 	dirName := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
 	repo, err := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
@@ -1078,7 +1088,7 @@ func TestGeoPropUpdateJourney(t *testing.T) {
 							Longitude: &coordinates[i][1],
 						},
 					},
-				}, []float32{0.5}, nil)
+				}, []float32{0.5}, nil, nil)
 			}
 		}
 	}
@@ -1125,9 +1135,12 @@ func TestCasingOfOperatorCombinations(t *testing.T) {
 	dirName := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
 	repo, err := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
@@ -1219,7 +1232,7 @@ func TestCasingOfOperatorCombinations(t *testing.T) {
 		for i, obj := range objects {
 			t.Run(fmt.Sprintf("importing object %d", i), func(t *testing.T) {
 				require.Nil(t,
-					repo.PutObject(context.Background(), obj, obj.Vector, nil))
+					repo.PutObject(context.Background(), obj, obj.Vector, nil, nil))
 			})
 		}
 	})
@@ -1341,7 +1354,7 @@ func TestCasingOfOperatorCombinations(t *testing.T) {
 				for pos, obj := range res {
 					names[pos] = obj.Schema.(map[string]interface{})["name"].(string)
 				}
-				assert.ElementsMatch(t, names, test.expectedNames, "names dont match")
+				assert.ElementsMatch(t, names, test.expectedNames, "names don't match")
 			})
 		}
 	})
@@ -1525,9 +1538,12 @@ func TestFilteringAfterDeletion(t *testing.T) {
 	dirName := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
 	repo, err := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
@@ -1587,7 +1603,7 @@ func TestFilteringAfterDeletion(t *testing.T) {
 		for i, obj := range objects {
 			t.Run(fmt.Sprintf("importing object %d", i), func(t *testing.T) {
 				require.Nil(t,
-					repo.PutObject(context.Background(), obj, obj.Vector, nil))
+					repo.PutObject(context.Background(), obj, obj.Vector, nil, nil))
 			})
 		}
 	})

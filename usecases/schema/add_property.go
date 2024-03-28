@@ -4,7 +4,7 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2023 Weaviate B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
 //  CONTACT: hello@weaviate.io
 //
@@ -17,10 +17,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/weaviate/weaviate/entities/schema"
-
-	"github.com/pkg/errors"
 	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
 )
 
 // AddClassProperty to an existing Class
@@ -32,6 +30,13 @@ func (m *Manager) AddClassProperty(ctx context.Context, principal *models.Princi
 		return err
 	}
 
+	if property.Name == "" {
+		return fmt.Errorf("property must contain name")
+	}
+	if property.DataType == nil {
+		return fmt.Errorf("property must contain dataType")
+	}
+
 	return m.addClassProperty(ctx, class, property)
 }
 
@@ -41,7 +46,7 @@ func (m *Manager) addClassProperty(ctx context.Context,
 	m.Lock()
 	defer m.Unlock()
 
-	class, err := schema.GetClassByName(m.schemaCache.ObjectSchema, className)
+	class, err := m.schemaCache.readOnlyClass(className)
 	if err != nil {
 		return err
 	}
@@ -52,10 +57,8 @@ func (m *Manager) addClassProperty(ctx context.Context,
 		existingPropertyNames[strings.ToLower(existingProperty.Name)] = true
 	}
 
-	if err := m.setNewPropDefaults(class, prop); err != nil {
-		return err
-	}
-	if err := m.validateProperty(prop, className, existingPropertyNames, false); err != nil {
+	m.setNewPropDefaults(class, prop)
+	if err := m.validateProperty(prop, class, existingPropertyNames, false); err != nil {
 		return err
 	}
 	// migrate only after validation in completed
@@ -67,10 +70,10 @@ func (m *Manager) addClassProperty(ctx context.Context,
 		// possible causes for errors could be nodes down (we expect every node to
 		// the up for a schema transaction) or concurrent transactions from other
 		// nodes
-		return errors.Wrap(err, "open cluster-wide transaction")
+		return fmt.Errorf("open cluster-wide transaction: %w", err)
 	}
 
-	if err := m.cluster.CommitWriteTransaction(ctx, tx); err != nil {
+	if err = m.cluster.CommitWriteTransaction(ctx, tx); err != nil {
 		// Only log the commit error, but do not abort the changes locally. Once
 		// we've told others to commit, we also need to commit ourselves!
 		//
@@ -90,44 +93,74 @@ func (m *Manager) addClassProperty(ctx context.Context,
 	return m.addClassPropertyApplyChanges(ctx, className, prop)
 }
 
-func (m *Manager) setNewPropDefaults(class *models.Class, prop *models.Property) error {
+func (m *Manager) setNewPropDefaults(class *models.Class, prop *models.Property) {
 	setPropertyDefaults(prop)
-	if err := validateUserProp(class, prop); err != nil {
-		return err
-	}
 	m.moduleConfig.SetSinglePropertyDefaults(class, prop)
-	return nil
 }
 
-func validateUserProp(class *models.Class, prop *models.Property) error {
+func (m *Manager) validatePropModuleConfig(class *models.Class, prop *models.Property) error {
 	if prop.ModuleConfig == nil {
 		return nil
-	} else {
-		modconfig, ok := prop.ModuleConfig.(map[string]interface{})
-		if !ok {
-			return fmt.Errorf("%v property config invalid", prop.Name)
+	}
+	modconfig, ok := prop.ModuleConfig.(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("%v property config invalid", prop.Name)
+	}
+
+	if !hasTargetVectors(class) {
+		configuredVectorizers := make([]string, 0, len(modconfig))
+		for modName := range modconfig {
+			if err := m.vectorizerValidator.ValidateVectorizer(modName); err == nil {
+				configuredVectorizers = append(configuredVectorizers, modName)
+			}
 		}
+		if len(configuredVectorizers) > 1 {
+			return fmt.Errorf("multiple vectorizers configured in property's %q moduleConfig: %v. class.vectorizer is set to %q",
+				prop.Name, configuredVectorizers, class.Vectorizer)
+		}
+
 		vectorizerConfig, ok := modconfig[class.Vectorizer]
 		if !ok {
+			if class.Vectorizer == "none" {
+				return nil
+			}
 			return fmt.Errorf("%v vectorizer module not part of the property", class.Vectorizer)
 		}
 		_, ok = vectorizerConfig.(map[string]interface{})
 		if !ok {
 			return fmt.Errorf("vectorizer config for vectorizer %v, not of type map[string]interface{}", class.Vectorizer)
 		}
+		return nil
 	}
+
+	// TODO reuse for multiple props?
+	vectorizersSet := map[string]struct{}{}
+	for _, cfg := range class.VectorConfig {
+		if vm, ok := cfg.Vectorizer.(map[string]interface{}); ok && len(vm) == 1 {
+			for vectorizer := range vm {
+				vectorizersSet[vectorizer] = struct{}{}
+			}
+		}
+	}
+	for vectorizer, cfg := range modconfig {
+		if _, ok := vectorizersSet[vectorizer]; !ok {
+			return fmt.Errorf("vectorizer %q not configured for any of target vectors", vectorizer)
+		}
+		if _, ok := cfg.(map[string]interface{}); !ok {
+			return fmt.Errorf("vectorizer config for vectorizer %q not of type map[string]interface{}", vectorizer)
+		}
+	}
+
 	return nil
 }
 
 func (m *Manager) addClassPropertyApplyChanges(ctx context.Context,
 	className string, prop *models.Property,
 ) error {
-	class, err := schema.GetClassByName(m.schemaCache.ObjectSchema, className)
+	class, err := m.schemaCache.addProperty(className, prop)
 	if err != nil {
 		return err
 	}
-
-	class.Properties = append(class.Properties, prop)
 	metadata, err := json.Marshal(&class)
 	if err != nil {
 		return fmt.Errorf("marshal class %s: %w", className, err)

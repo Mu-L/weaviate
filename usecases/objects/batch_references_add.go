@@ -4,7 +4,7 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2023 Weaviate B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
 //  CONTACT: hello@weaviate.io
 //
@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+
+	enterrors "github.com/weaviate/weaviate/entities/errors"
 
 	"github.com/go-openapi/strfmt"
 	"github.com/weaviate/weaviate/entities/additional"
@@ -53,8 +55,22 @@ func (b *BatchManager) addReferences(ctx context.Context, principal *models.Prin
 	}
 
 	batchReferences := b.validateReferencesConcurrently(ctx, principal, refs)
+
 	if err := b.autodetectToClass(ctx, principal, batchReferences); err != nil {
 		return nil, err
+	}
+
+	// MT validation must be done after auto-detection as we cannot know the target class beforehand in all cases
+	for i, ref := range batchReferences {
+		if ref.Err == nil {
+			if shouldValidateMultiTenantRef(ref.Tenant, ref.From, ref.To) {
+				// can only validate multi-tenancy when everything above succeeds
+				err := validateReferenceMultiTenancy(ctx, principal, b.schemaManager, b.vectorRepo, ref.From, ref.To, ref.Tenant)
+				if err != nil {
+					batchReferences[i].Err = err
+				}
+			}
+		}
 	}
 
 	if res, err := b.vectorRepo.AddBatchReferences(ctx, batchReferences, repl); err != nil {
@@ -80,8 +96,10 @@ func (b *BatchManager) validateReferencesConcurrently(ctx context.Context,
 
 	// Generate a goroutine for each separate request
 	for i, ref := range refs {
+		i := i
+		ref := ref
 		wg.Add(1)
-		go b.validateReference(ctx, principal, wg, ref, i, &c)
+		enterrors.GoWrapper(func() { b.validateReference(ctx, principal, wg, ref, i, &c) }, b.logger)
 	}
 
 	wg.Wait()
@@ -101,7 +119,7 @@ func (b *BatchManager) autodetectToClass(ctx context.Context,
 	}
 	for i, ref := range batchReferences {
 		// get to class from property datatype
-		if ref.To.Class != "" {
+		if ref.To.Class != "" || ref.Err != nil {
 			continue
 		}
 		className := string(ref.From.Class)
@@ -111,12 +129,14 @@ func (b *BatchManager) autodetectToClass(ctx context.Context,
 		if !ok {
 			class := scheme.FindClassByName(ref.From.Class)
 			if class == nil {
-				return NewErrInvalidUserInput("class for ref does not exist: "+className+": %v", err)
+				batchReferences[i].Err = fmt.Errorf("class %s does not exist", className)
+				continue
 			}
 
 			prop, err := schema.GetPropertyByName(class, propName)
 			if err != nil {
-				return NewErrInvalidUserInput("get prop: %v", err)
+				batchReferences[i].Err = fmt.Errorf("property %s does not exist for class %s", propName, className)
+				continue
 			}
 			if len(prop.DataType) > 1 {
 				continue // can't auto-detect for multi-target
@@ -151,16 +171,13 @@ func (b *BatchManager) validateReference(ctx context.Context, principal *models.
 			target.PeerName))
 	}
 
+	// target id must be lowercase
+	target.TargetID = strfmt.UUID(strings.ToLower(target.TargetID.String()))
+
 	if len(validateErrors) == 0 {
 		err = nil
 	} else {
 		err = joinErrors(validateErrors)
-	}
-
-	if err == nil && shouldValidateMultiTenantRef(ref.Tenant, source, target) {
-		// can only validate multi-tenancy when everything above succeeds
-		err = validateReferenceMultiTenancy(ctx, principal,
-			b.schemaManager, b.vectorRepo, source, target, ref.Tenant)
 	}
 
 	*resultsC <- BatchReference{
@@ -182,7 +199,7 @@ func validateReferenceMultiTenancy(ctx context.Context,
 	}
 
 	sourceClass, targetClass, err := getReferenceClasses(
-		ctx, principal, schemaManager, source.Class.String(), target.Class)
+		ctx, principal, schemaManager, source.Class.String(), source.Property.String(), target.Class)
 	if err != nil {
 		return err
 	}
@@ -218,11 +235,11 @@ func validateReferenceMultiTenancy(ctx context.Context,
 
 func getReferenceClasses(ctx context.Context,
 	principal *models.Principal, schemaManager schemaManager,
-	classFrom, classTo string,
+	classFrom, fromProperty, classTo string,
 ) (sourceClass *models.Class, targetClass *models.Class, err error) {
-	if classFrom == "" || classTo == "" {
+	if classFrom == "" {
 		err = fmt.Errorf("references involving a multi-tenancy enabled class " +
-			"requires class name in the beacon url")
+			"requires class name in the source beacon url")
 		return
 	}
 
@@ -234,6 +251,20 @@ func getReferenceClasses(ctx context.Context,
 	if sourceClass == nil {
 		err = fmt.Errorf("source class %q not found in schema", classFrom)
 		return
+	}
+	// we can auto-detect the to class from the schema if it is a single target reference
+	if classTo == "" {
+		refProp, err2 := schema.GetPropertyByName(sourceClass, fromProperty)
+		if err2 != nil {
+			err = fmt.Errorf("get source refprop %q: %w", classFrom, err2)
+			return
+		}
+
+		if len(refProp.DataType) != 1 {
+			err = fmt.Errorf("multi-target references require the class name in the target beacon url")
+			return
+		}
+		classTo = refProp.DataType[0]
 	}
 
 	targetClass, err = schemaManager.GetClass(ctx, principal, classTo)

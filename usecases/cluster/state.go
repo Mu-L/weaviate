@@ -4,7 +4,7 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2023 Weaviate B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
 //  CONTACT: hello@weaviate.io
 //
@@ -33,7 +33,10 @@ type Config struct {
 	DataBindPort            int        `json:"dataBindPort" yaml:"dataBindPort"`
 	Join                    string     `json:"join" yaml:"join"`
 	IgnoreStartupSchemaSync bool       `json:"ignoreStartupSchemaSync" yaml:"ignoreStartupSchemaSync"`
+	SkipSchemaSyncRepair    bool       `json:"skipSchemaSyncRepair" yaml:"skipSchemaSyncRepair"`
 	AuthConfig              AuthConfig `json:"auth" yaml:"auth"`
+	AdvertiseAddr           string     `json:"advertiseAddr" yaml:"advertiseAddr"`
+	AdvertisePort           int        `json:"advertisePort" yaml:"advertisePort"`
 }
 
 type AuthConfig struct {
@@ -70,6 +73,14 @@ func Init(userConfig Config, dataPath string, logger logrus.FieldLogger) (_ *Sta
 	cfg.Events = events{&state.delegate}
 	if userConfig.GossipBindPort != 0 {
 		cfg.BindPort = userConfig.GossipBindPort
+	}
+
+	if userConfig.AdvertiseAddr != "" {
+		cfg.AdvertiseAddr = userConfig.AdvertiseAddr
+	}
+
+	if userConfig.AdvertisePort != 0 {
+		cfg.AdvertisePort = userConfig.AdvertisePort
 	}
 
 	if state.list, err = memberlist.Create(cfg); err != nil {
@@ -188,6 +199,10 @@ func (s *State) NodeHostname(nodeName string) (string, bool) {
 
 func (s *State) SchemaSyncIgnored() bool {
 	return s.config.IgnoreStartupSchemaSync
+}
+
+func (s *State) SkipSchemaRepair() bool {
+	return s.config.SkipSchemaSyncRepair
 }
 
 func (s *State) NodeInfo(node string) (NodeInfo, bool) {

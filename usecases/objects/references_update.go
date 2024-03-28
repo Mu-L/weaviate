@@ -4,7 +4,7 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2023 Weaviate B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
 //  CONTACT: hello@weaviate.io
 //
@@ -72,21 +72,17 @@ func (m *Manager) UpdateObjectReferences(ctx context.Context, principal *models.
 	defer unlock()
 
 	validator := validation.New(m.vectorRepo.Exists, m.config, repl)
-	if err := input.validate(ctx, principal, validator, m.schemaManager, tenant); err != nil {
+	parsedTargetRefs, err := input.validate(ctx, principal, validator, m.schemaManager, tenant)
+	if err != nil {
 		if errors.As(err, &ErrMultiTenancy{}) {
 			return &Error{"bad inputs", StatusUnprocessableEntity, err}
 		}
 		return &Error{"bad inputs", StatusBadRequest, err}
 	}
 
-	for i, ref := range input.Refs {
-		beacon, err := crossref.Parse(ref.Beacon.String())
-		if err != nil {
-			return &Error{"cannot parse beacon", StatusBadRequest, err}
-		}
-
-		if beacon.Class == "" {
-			toClass, toBeacon, replace, err := m.autodetectToClass(ctx, principal, input.Class, input.Property, beacon)
+	for i := range input.Refs {
+		if parsedTargetRefs[i].Class == "" {
+			toClass, toBeacon, replace, err := m.autodetectToClass(ctx, principal, input.Class, input.Property, parsedTargetRefs[i])
 			if err != nil {
 				return err
 			}
@@ -94,8 +90,13 @@ func (m *Manager) UpdateObjectReferences(ctx context.Context, principal *models.
 			if replace {
 				input.Refs[i].Class = toClass
 				input.Refs[i].Beacon = toBeacon
+				parsedTargetRefs[i].Class = string(toClass)
 			}
 		}
+		if err := input.validateExistence(ctx, validator, tenant, parsedTargetRefs[i]); err != nil {
+			return &Error{"validate existence", StatusBadRequest, err}
+		}
+
 	}
 
 	obj := res.Object()
@@ -105,7 +106,7 @@ func (m *Manager) UpdateObjectReferences(ctx context.Context, principal *models.
 		obj.Properties.(map[string]interface{})[input.Property] = input.Refs
 	}
 	obj.LastUpdateTimeUnix = m.timeSource.Now()
-	err = m.vectorRepo.PutObject(ctx, obj, res.Vector, repl)
+	err = m.vectorRepo.PutObject(ctx, obj, res.Vector, res.Vectors, repl)
 	if err != nil {
 		return &Error{"repo.putobject", StatusInternalServerError, err}
 	}
@@ -117,19 +118,27 @@ func (req *PutReferenceInput) validate(
 	principal *models.Principal,
 	v *validation.Validator,
 	sm schemaManager, tenant string,
-) error {
+) ([]*crossref.Ref, error) {
 	if err := validateReferenceName(req.Class, req.Property); err != nil {
-		return err
+		return nil, err
 	}
-	if err := v.ValidateMultipleRef(ctx, req.Refs, "validate references", tenant); err != nil {
-		return err
+	refs, err := v.ValidateMultipleRef(ctx, req.Refs, "validate references", tenant)
+	if err != nil {
+		return nil, err
 	}
 
 	schema, err := sm.GetSchema(principal)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return validateReferenceSchema(req.Class, req.Property, schema)
+	return refs, validateReferenceSchema(req.Class, req.Property, schema)
+}
+
+func (req *PutReferenceInput) validateExistence(
+	ctx context.Context,
+	v *validation.Validator, tenant string, ref *crossref.Ref,
+) error {
+	return v.ValidateExistence(ctx, ref, "validate reference", tenant)
 }
 
 // validateNames validates class and property names
@@ -160,8 +169,8 @@ func validateReferenceSchema(class, property string, sch schema.Schema) error {
 		return err
 	}
 
-	if dt.IsPrimitive() {
-		return fmt.Errorf("property '%s' is a primitive datatype, not a reference-type", property)
+	if !dt.IsReference() {
+		return fmt.Errorf("property '%s' is not a reference-type", property)
 	}
 
 	return nil

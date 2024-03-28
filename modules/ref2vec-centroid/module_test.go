@@ -4,7 +4,7 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2023 Weaviate B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
 //  CONTACT: hello@weaviate.io
 //
@@ -29,6 +29,7 @@ import (
 	"github.com/weaviate/weaviate/entities/schema"
 	"github.com/weaviate/weaviate/entities/schema/crossref"
 	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/usecases/config"
 )
 
 func TestRef2VecCentroid(t *testing.T) {
@@ -36,7 +37,7 @@ func TestRef2VecCentroid(t *testing.T) {
 	defer cancel()
 	sp := newFakeStorageProvider(t)
 	logger, _ := test.NewNullLogger()
-	params := moduletools.NewInitParams(sp, nil, logger)
+	params := moduletools.NewInitParams(sp, nil, config.Config{}, logger)
 
 	mod := New()
 	classConfig := fakeClassConfig(mod.ClassConfigDefaults())
@@ -108,10 +109,10 @@ func TestRef2VecCentroid(t *testing.T) {
 				repo.On("Object", ctx, ref.Class, ref.TargetID).
 					Return(&search.Result{Vector: []float32{1, 2, 3}}, nil)
 
-				err := mod.VectorizeObject(ctx, obj, classConfig, repo.Object)
+				vec, err := mod.VectorizeObject(ctx, obj, classConfig, repo.Object)
 				assert.Nil(t, err)
 				expectedVec := models.C11yVector{1, 2, 3}
-				assert.EqualValues(t, expectedVec, obj.Vector)
+				assert.EqualValues(t, expectedVec, vec)
 			})
 
 			t.Run("no refVecs", func(t *testing.T) {
@@ -124,7 +125,7 @@ func TestRef2VecCentroid(t *testing.T) {
 				repo.On("Object", ctx, ref.Class, ref.TargetID).
 					Return(&search.Result{}, nil)
 
-				err := mod.VectorizeObject(ctx, obj, classConfig, repo.Object)
+				_, err := mod.VectorizeObject(ctx, obj, classConfig, repo.Object)
 				assert.Nil(t, err)
 				assert.Nil(t, nil, obj.Vector)
 			})
@@ -149,7 +150,7 @@ func TestRef2VecCentroid(t *testing.T) {
 				repo.On("Object", ctx, ref2.Class, ref2.TargetID).
 					Return(&search.Result{Vector: []float32{1, 2, 3}}, nil)
 
-				err := mod.VectorizeObject(ctx, obj, classConfig, repo.Object)
+				_, err := mod.VectorizeObject(ctx, obj, classConfig, repo.Object)
 				assert.EqualError(t, err, expectedErr.Error())
 			})
 		})

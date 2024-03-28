@@ -4,7 +4,7 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2023 Weaviate B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
 //  CONTACT: hello@weaviate.io
 //
@@ -32,6 +32,8 @@ type schemaManager interface {
 		name string,
 	) (*models.Class, error)
 	AddClassProperty(ctx context.Context, principal *models.Principal,
+		class string, property *models.Property) error
+	MergeClassObjectProperty(ctx context.Context, principal *models.Principal,
 		class string, property *models.Property) error
 }
 
@@ -99,7 +101,7 @@ func (m *Manager) addObjectToConnectorAndSchema(ctx context.Context, principal *
 	}
 	object.ID = id
 
-	err = m.autoSchemaManager.autoSchema(ctx, principal, object)
+	err = m.autoSchemaManager.autoSchema(ctx, principal, object, true)
 	if err != nil {
 		return nil, NewErrInvalidUserInput("invalid object: %v", err)
 	}
@@ -119,12 +121,12 @@ func (m *Manager) addObjectToConnectorAndSchema(ctx context.Context, principal *
 	if err != nil {
 		return nil, err
 	}
-	err = m.modulesProvider.UpdateVector(ctx, object, class, nil, m.findObject, m.logger)
+	err = m.modulesProvider.UpdateVector(ctx, object, class, m.findObject, m.logger)
 	if err != nil {
 		return nil, err
 	}
 
-	err = m.vectorRepo.PutObject(ctx, object, object.Vector, repl)
+	err = m.vectorRepo.PutObject(ctx, object, object.Vector, object.Vectors, repl)
 	if err != nil {
 		return nil, fmt.Errorf("put object: %w", err)
 	}
